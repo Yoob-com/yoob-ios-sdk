@@ -92,7 +92,13 @@ public actor StreamingAvatar {
     }
     private func renderReady(ticket: UUID) async throws {
         while nextFrame + 9 < nextFeature {
-            guard crops.count < 60 else { throw AvatarError.invalidPack("renderer backpressure") }
+            // Lip-sync stays up if frames stop being shown for a while (RenderPace normally keeps this far below):
+            // drop the oldest unshown frames instead of ending the renderer, as the Luna app does.
+            if crops.count >= 60 {
+                let keepFrom = nextFrame - 30
+                crops = crops.filter { $0.key >= keepFrom }
+                hosts = hosts.filter { $0.key >= keepFrom }
+            }
             var window = [Float](repeating: 0, count: 40 * 1024)
             for relative in -10..<10 {
                 if let feature = features[nextFrame + relative] {

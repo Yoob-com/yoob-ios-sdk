@@ -49,7 +49,7 @@ final class SpeechPlayer: @unchecked Sendable {
             engine.prepare()
             do { try engine.start() } catch { throw YoobError.renderer("audio output: \(error.localizedDescription)") }
         }
-        finishedSamples = 0; queued = []; runBase = 0; running = false
+        finishedSamples = 0; queued = []; runBase = 0; running = false; startPending = false; starts = 0
     }
 
     // MARK: - Microphone
@@ -204,19 +204,47 @@ final class SpeechPlayer: @unchecked Sendable {
         pcm.withUnsafeBytes { raw in
             for i in 0..<count { channel[i] = Float(Int16(littleEndian: raw.loadUnaligned(fromByteOffset: i * 2, as: Int16.self))) / 32768 }
         }
-        queued.append(Int64(count))
         let ticket = generation
-        if !running {
-            // The node's clock restarts at zero on play(); remember where in the utterance that is.
+        if !running && !startPending {
             // A drain's deferred stop may not have run yet; stop now (nothing is queued, so no callbacks fire).
             player.stop()
-            runBase = finishedSamples; running = true
-            player.play()
+        }
+        queued.append(Int64(count))
+        if !running {
+            // The first start of an utterance plays at once (YoobAvatar already held it for the first frame). A restart
+            // after the buffer ran dry mid-utterance waits for a cushion: restarting on one small chunk on a jittery
+            // network underran again at once, a string of tiny bursts that sounds choppy and robotic. A short tail
+            // (the last syllables) starts after a moment instead of waiting for audio that will not come.
+            let cushion = Int64(format.sampleRate * Self.restartCushionSeconds)
+            if starts == 0 || queued.reduce(0, +) >= cushion { startLocked() }
+            else if !startPending {
+                startPending = true
+                control.asyncAfter(deadline: .now() + Self.tailStartSeconds) { [weak self] in
+                    guard let self else { return }
+                    self.lock.lock()
+                    if ticket == self.generation, self.startPending { self.startLocked() }
+                    self.lock.unlock()
+                }
+            }
         }
         lock.unlock()
         player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
             self?.finished(count: Int64(count), ticket: ticket)
         }
+    }
+
+    /// Restarts after a mid-utterance underrun wait for this much audio (or `tailStartSeconds`).
+    static let restartCushionSeconds = 0.16
+    static let tailStartSeconds = 0.12
+    private var starts = 0
+    private var startPending = false
+    /// Call with `lock` held.
+    private func startLocked() {
+        guard !running else { return }
+        startPending = false
+        // The node's clock restarts at zero on play(); remember where in the utterance that is.
+        runBase = finishedSamples; running = true; starts += 1
+        player.play()
     }
 
     private func finished(count: Int64, ticket: Int) {
@@ -232,7 +260,7 @@ final class SpeechPlayer: @unchecked Sendable {
         control.async { [weak self] in
             guard let self else { return }
             self.lock.lock()
-            let stillDrained = ticket == self.generation && self.queued.isEmpty && !self.running
+            let stillDrained = ticket == self.generation && self.queued.isEmpty && !self.running && !self.startPending
             self.lock.unlock()
             if stillDrained { self.player.stop(); self.onDrained?() }
         }
@@ -241,7 +269,7 @@ final class SpeechPlayer: @unchecked Sendable {
     var isIdle: Bool { lock.withLock { queued.isEmpty } }
 
     func stop() {
-        lock.lock(); generation += 1; queued = []; running = false; lock.unlock()
+        lock.lock(); generation += 1; queued = []; running = false; startPending = false; starts = 0; lock.unlock()
         player.stop()
     }
 

@@ -40,6 +40,8 @@ public final class YoobAvatar {
     /// The current speaking frame. Shown instead of the idle frames while `isShowingSpeech` is true.
     public private(set) var speechFrame: CGImage?
     public private(set) var isShowingSpeech = false
+    /// Peak level (0...1) of the speech being heard now; 0 in silence. Drives `YoobAvatarView`'s speaking motion.
+    public private(set) var voiceLevel: Double = 0
     /// Width over height of every frame this character draws.
     public private(set) var aspectRatio: CGFloat = 9.0 / 16.0
     public private(set) var manifest: CharacterManifest?
@@ -105,6 +107,9 @@ public final class YoobAvatar {
         var ended = false
         var engineFailed = false
         var receivedSamples: Int64 = 0
+        /// Peak of every 40 ms of received speech, by video frame.
+        var levels: [Float] = []
+        var levelPeak: Float = 0, levelFill = 0
         var externalPlayed: Int64 = 0
         var prepared: [Int: CGImage] = [:]
         var nextToPrepare = 0
@@ -279,6 +284,14 @@ public final class YoobAvatar {
         }
         if current.ended { finishUtterance(); return try ingest(pcm, sampleRate: sampleRate) }
         current.receivedSamples += Int64(pcm.count / 2)
+        let perFrame = max(1, sampleRate / 25)
+        pcm.withUnsafeBytes { raw in
+            for i in 0..<(pcm.count / 2) {
+                let value = abs(Float(Int16(littleEndian: raw.loadUnaligned(fromByteOffset: i * 2, as: Int16.self))) / 32768)
+                current.levelPeak = max(current.levelPeak, value); current.levelFill += 1
+                if current.levelFill == perFrame { current.levels.append(current.levelPeak); current.levelPeak = 0; current.levelFill = 0 }
+            }
+        }
         if engine != nil, !current.engineFailed {
             let bytesPerSecond = sampleRate * 2
             var offset = 0
@@ -384,6 +397,8 @@ public final class YoobAvatar {
         let playing = externalClock ? played > 0 : utterance.started
         // Frame n covers audio from n/25 s; show it once that audio is audible.
         let playedFrame = playing ? Int(Double(played) * 25 / utterance.sampleRate) : -1
+        let level = playedFrame >= 0 && playedFrame < utterance.levels.count ? Double(utterance.levels[playedFrame]) : 0
+        if level != voiceLevel { voiceLevel = level }
 
         if playedFrame >= 0, let frame = utterance.prepared.keys.filter({ $0 <= playedFrame && $0 > utterance.shown }).max(),
            let image = utterance.prepared[frame] {
@@ -493,6 +508,7 @@ public final class YoobAvatar {
         engine = nil
         isShowingSpeech = false
         speechFrame = nil
+        voiceLevel = 0
         if let credentials {
             self.credentials = nil
             Task { await SessionAPI.end(credentials) }

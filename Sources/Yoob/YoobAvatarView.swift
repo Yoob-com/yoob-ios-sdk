@@ -6,17 +6,47 @@ public struct YoobAvatarView: View {
     private let avatar: YoobAvatar
     private let contentMode: ContentMode
     private let fade: Double
+    private let motion: Bool
+    @State private var motionState = MotionState()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// - Parameters:
     ///   - contentMode: `.fill` crops to the view (the default, for full-screen characters); `.fit` letterboxes.
     ///   - fade: Seconds for the idle ↔ speaking cross-fade.
-    public init(_ avatar: YoobAvatar, contentMode: ContentMode = .fill, fade: Double = 0.15) {
+    ///   - speakingMotion: Realistic characters nod on stressed syllables and sway slightly, more while speaking, and
+    ///     breathe in silence (a whole-picture transform of at most a few points). Off with Reduce Motion.
+    public init(_ avatar: YoobAvatar, contentMode: ContentMode = .fill, fade: Double = 0.15, speakingMotion: Bool = true) {
         self.avatar = avatar
         self.contentMode = contentMode
         self.fade = fade
+        self.motion = speakingMotion
     }
 
     public var body: some View {
+        let moving = motion && !reduceMotion && avatar.manifest?.engine == .realistic
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !moving)) { timeline in
+            let pose = moving ? motionState.update(level: avatar.voiceLevel, speaking: avatar.isShowingSpeech,
+                                                   at: timeline.date.timeIntervalSinceReferenceDate) : .zero
+            layers
+                .scaleEffect(1 + pose.scale, anchor: UnitPoint(x: 0.5, y: 0.45))
+                .rotationEffect(.degrees(pose.degrees), anchor: UnitPoint(x: 0.5, y: 0.62))
+                .offset(x: pose.dx, y: pose.dy)
+        }
+        .clipped()
+        .accessibilityElement()
+        .accessibilityLabel(avatar.manifest?.displayName ?? "Character")
+        .accessibilityAddTraits(.isImage)
+    }
+
+    /// The motion's state lives outside SwiftUI's diffing: advanced once per animation frame.
+    private final class MotionState {
+        private var motion = SpeakingMotion()
+        func update(level: Double, speaking: Bool, at time: Double) -> SpeakingMotion.Pose {
+            motion.update(level: level, speaking: speaking, at: time)
+        }
+    }
+
+    private var layers: some View {
         ZStack {
             IdleLayer(avatar: avatar, contentMode: contentMode)
                 .compositingGroup()
@@ -28,10 +58,6 @@ public struct YoobAvatarView: View {
             }
         }
         .animation(.easeInOut(duration: fade), value: avatar.isShowingSpeech)
-        .clipped()
-        .accessibilityElement()
-        .accessibilityLabel(avatar.manifest?.displayName ?? "Character")
-        .accessibilityAddTraits(.isImage)
     }
 
     private func picture(_ image: CGImage) -> some View {
