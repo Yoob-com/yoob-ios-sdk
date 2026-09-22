@@ -355,11 +355,30 @@ next to it:
 
 ```sh
 YOOB_API_KEY=yoob_test_… YOOB_EXAMPLE_ALLOW_ANONYMOUS=1 node Examples/token-server/server.mjs   # 127.0.0.1:3100
-cd Examples/QuickStart && xcodegen generate && open QuickStart.xcodeproj
+open Examples/QuickStart/QuickStart.xcodeproj    # run the QuickStart scheme on an iOS Simulator
 ```
 
 `YOOB_EXAMPLE_ALLOW_ANONYMOUS=1` lets anyone who can reach the server mint sessions, so use it only on your own
-machine. Before you deploy a token server, replace `requireUser()` with your own sign-in check.
+machine. Before you deploy a token server, replace `requireUser()` with your own sign-in check. The project is
+generated from `project.yml` (`xcodegen generate`) only when you change it; the checked-in project opens as is.
+The token server listens on 127.0.0.1, which the Simulator reaches; on a device, point `YoobTokenURL` and
+`YoobVoiceURL` in the example's Info.plist at a backend the phone can reach.
+
+## Contributing
+
+Members of the [Yoob-com](https://github.com/Yoob-com) GitHub organization get their own sandbox key, so a fresh
+clone shows the characters without anyone sharing a secret:
+
+```sh
+gh auth login                                   # once, with your GitHub account
+node scripts/yoob-dev-key.mjs                   # saves a sandbox key to ~/.config/yoob/contributor.key
+YOOB_EXAMPLE_ALLOW_ANONYMOUS=1 node Examples/token-server/server.mjs
+open Examples/QuickStart/QuickStart.xcodeproj   # run on an iOS Simulator
+swift test                                      # unit tests; the pack tests skip without local packs
+```
+
+The key is a sandbox key: free 5-minute sessions, an hour a day, never billed. Running the script again replaces it.
+If it says you are not a member, make your organization membership public or ask an owner to add you.
 
 ## Security
 
