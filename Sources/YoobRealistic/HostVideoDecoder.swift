@@ -30,33 +30,48 @@ final class HostVideoDecoder: @unchecked Sendable {
 
     func image(forVideoFrame index: Int) throws -> CGImage {
         try queue.sync {
-            if track == nil {
-                let asset = AVAsset(url: url)
-                guard let found = asset.tracks(withMediaType: .video).first else { throw AvatarError.invalidPack("host video") }
-                self.asset = asset
-                track = found
-            }
-            // Continue forward while the request is close ahead of the cursor; otherwise seek to
-            // the keyframe at or below the request and decode forward from there.
-            if nextIndex < 0 || index < nextIndex || index - nextIndex > keyframeInterval {
-                try start(at: index - index % keyframeInterval)
-            }
-            while nextIndex <= index {
-                guard let sample = output?.copyNextSampleBuffer() else { throw AvatarError.invalidPack("host video") }
-                let shown = indexOf(sample)
-                if shown == index {
-                    guard let buffer = CMSampleBufferGetImageBuffer(sample) else { throw AvatarError.invalidPack("host video") }
-                    var image: CGImage?
-                    guard VTCreateCGImageFromCVPixelBuffer(buffer, options: nil, imageOut: &image) == noErr, let image else {
-                        throw AvatarError.invalidPack("host video")
-                    }
-                    nextIndex = shown + 1
-                    return image
+            try imageLocked(forVideoFrame: index)
+        }
+    }
+
+    /// Lock-free: only called on the serial queue.
+    private func imageLocked(forVideoFrame index: Int) throws -> CGImage {
+        if track == nil {
+            let asset = AVAsset(url: url)
+            guard let found = asset.tracks(withMediaType: .video).first else { throw AvatarError.invalidPack("host video") }
+            self.asset = asset
+            track = found
+        }
+        // Continue forward while the request is close ahead of the cursor; otherwise seek to
+        // the keyframe at or below the request and decode forward from there.
+        if nextIndex < 0 || index < nextIndex || index - nextIndex > keyframeInterval {
+            try start(at: index - index % keyframeInterval)
+        }
+        do { return try drain(until: index) }
+        catch {
+            // A seek can land on the wrong side of a GOP (lane jumps in the head path reopen the reader often).
+            // One reopen from the request's own keyframe recovers; only then does this frame fail.
+            try start(at: max(0, index - index % keyframeInterval))
+            return try drain(until: index)
+        }
+    }
+
+    private func drain(until index: Int) throws -> CGImage {
+        while nextIndex <= index {
+            guard let sample = output?.copyNextSampleBuffer() else { throw AvatarError.invalidPack("host video") }
+            let shown = indexOf(sample)
+            if shown == index {
+                guard let buffer = CMSampleBufferGetImageBuffer(sample) else { throw AvatarError.invalidPack("host video") }
+                var image: CGImage?
+                guard VTCreateCGImageFromCVPixelBuffer(buffer, options: nil, imageOut: &image) == noErr, let image else {
+                    throw AvatarError.invalidPack("host video")
                 }
                 nextIndex = shown + 1
+                return image
             }
-            throw AvatarError.invalidPack("host video")
+            nextIndex = shown + 1
         }
+        throw AvatarError.invalidPack("host video")
     }
 
     /// Lock-free: only called on the serial queue. Starts delivery at `keyframe`, which must be a keyframe index.

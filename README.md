@@ -11,7 +11,7 @@ own LLM and voice.
 - **Private by design.** Faces render on the device. The SDK sends Yoob only what is listed under [Network](#network):
   conversation audio goes through Yoob only when you use Yoob voice.
 
-Requires iOS 17 or later and Xcode 16 or later. The current preview release is 0.4.1; see [Changes in 0.4.1](#changes-in-041) and [0.4.0](#changes-in-040) if you are upgrading.
+Requires iOS 17 or later and Xcode 16 or later. The current preview release is 0.5.0; see [Changes in 0.5.0](#changes-in-050), [0.4.1](#changes-in-041) and [0.4.0](#changes-in-040) if you are upgrading.
 
 ## Install
 
@@ -410,6 +410,20 @@ If it says you are not a member, make your organization membership public or ask
   4. Always set the voice and instructions for voice sessions on the server.
   5. Build the request body yourself. Don't pass fields from the app through to Yoob.
   6. Keep the key in the server's environment, and return Yoob's response without logging tokens.
+
+## Changes in 0.5.0
+
+Fixes and motion from the Luna app, which runs the same realistic engine:
+
+- **Smoother voice on a slow network.** When the audio buffer runs dry mid-sentence, playback now waits for a 160 ms
+  cushion before resuming (a short tail still starts after 120 ms). Resuming on each small packet made a jittery
+  connection sound choppy and robotic.
+- **Speaking motion.** Realistic characters nod on stressed syllables and sway a little more while they talk, and
+  breathe in silence: one whole-picture transform of a few points, driven by the voice being heard. Turn it off with
+  `YoobAvatarView(avatar, speakingMotion: false)`; it is always off with Reduce Motion. `YoobAvatar.voiceLevel` exposes
+  the level it follows.
+- **More resilient rendering.** A host-video frame the decoder misses reopens the reader once instead of failing the
+  face, and a renderer whose frames stop being shown drops the oldest instead of stopping.
 
 ## Changes in 0.4.1
 
