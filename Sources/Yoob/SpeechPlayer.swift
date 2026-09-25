@@ -24,6 +24,17 @@ final class SpeechPlayer: @unchecked Sendable {
 
     var sampleRate: Double { lock.withLock { format?.sampleRate ?? 24000 } }
 
+    /// Seconds from the player to the listener's ear the audio session reports (the speaker, or much more over Bluetooth):
+    /// `playedSamples` counts what the player has rendered, so the face shows its frames this much later.
+    static var outputLatency: Double {
+        #if os(iOS)
+        let latency = AVAudioSession.sharedInstance().outputLatency
+        return latency.isFinite ? min(max(0, latency), 0.5) : 0
+        #else
+        return 0
+        #endif
+    }
+
     /// Samples heard so far in this utterance.
     var playedSamples: Int64 {
         lock.lock(); defer { lock.unlock() }

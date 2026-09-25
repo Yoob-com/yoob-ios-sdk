@@ -2,7 +2,7 @@ import Foundation
 
 /// Yoob renders a talking character on the device from any speech audio.
 public enum Yoob {
-    public static let version = "0.5.0"
+    public static let version = "0.6.0"
 
     /// Removes every downloaded character except the versions currently loaded.
     public static func clearCache() async throws { try await AssetStore.shared.clear() }

@@ -9,8 +9,9 @@ final class EngineThroughputTests: XCTestCase {
         let env = ProcessInfo.processInfo.environment
         guard let packs = env["YOOB_LOCAL_PACKS"], let speech = env["YOOB_SPEECH_PCM"] else { throw XCTSkip("no packs") }
         let pcm = try Data(contentsOf: URL(fileURLWithPath: speech))
-        for character in ["luna-realistic", "luna-anime"] {
+        for character in ["luna-realistic", "luna-anime", "luna-anime-v2"] {
             let root = URL(fileURLWithPath: packs).appendingPathComponent(character)
+            guard FileManager.default.fileExists(atPath: root.path) else { continue }
             let manifest = try JSONDecoder().decode(CharacterManifest.self, from: Data(contentsOf: root.appendingPathComponent("character.json")))
             let clock = ContinuousClock()
             var start = clock.now

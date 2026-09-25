@@ -19,34 +19,34 @@ final class HostFrameDecoderTests: XCTestCase {
 
     func testReturnsRequestedFrameAndDecodesPrefetchedFramesOnce() throws {
         let loads = Loads()
-        let decoder = HostFrameDecoder { index in loads.record(index); return Self.image(for: index) }
+        let decoder = HostFrameDecoder { index in loads.record(index); return .image(Self.image(for: index)) }
         // Consecutive call frames: each request was prefetched by the previous one.
         for index in 0..<10 {
-            XCTAssertEqual(try decoder.image(index, prefetch: [index + 1, index + 2]).width, index + 1)
+            XCTAssertEqual(try decoder.picture(index, prefetch: [index + 1, index + 2]).width, index + 1)
         }
         for index in 0..<10 { XCTAssertEqual(loads.count(index), 1, "host \(index)") }
     }
 
     func testUnexpectedJumpStillDecodesTheRequestedFrame() throws {
-        let decoder = HostFrameDecoder { Self.image(for: $0) }
-        XCTAssertEqual(try decoder.image(3, prefetch: [4, 5]).width, 4)
+        let decoder = HostFrameDecoder { .image(Self.image(for: $0)) }
+        XCTAssertEqual(try decoder.picture(3, prefetch: [4, 5]).width, 4)
         // A voice-first restart moves the call frame; the decoder must not return a stale prefetched frame.
-        XCTAssertEqual(try decoder.image(40, prefetch: [41, 42]).width, 41)
+        XCTAssertEqual(try decoder.picture(40, prefetch: [41, 42]).width, 41)
         // Ping-pong turnaround at the end of the host clip.
-        XCTAssertEqual(try decoder.image(374, prefetch: [373, 372]).width, 375)
-        XCTAssertEqual(try decoder.image(373, prefetch: [372, 371]).width, 374)
+        XCTAssertEqual(try decoder.picture(374, prefetch: [373, 372]).width, 375)
+        XCTAssertEqual(try decoder.picture(373, prefetch: [372, 371]).width, 374)
     }
 
     func testDecodeErrorsReachTheCaller() {
         struct Broken: Error {}
         let decoder = HostFrameDecoder { index in
             if index == 2 { throw Broken() }
-            return Self.image(for: index)
+            return .image(Self.image(for: index))
         }
-        XCTAssertNoThrow(try decoder.image(1, prefetch: [2]))
-        XCTAssertThrowsError(try decoder.image(2, prefetch: [3])) { XCTAssertTrue($0 is Broken) }
+        XCTAssertNoThrow(try decoder.picture(1, prefetch: [2]))
+        XCTAssertThrowsError(try decoder.picture(2, prefetch: [3])) { XCTAssertTrue($0 is Broken) }
         // The failure is not cached forever once the frame falls out of the window.
-        XCTAssertEqual(try decoder.image(3, prefetch: [4]).width, 4)
+        XCTAssertEqual(try decoder.picture(3, prefetch: [4]).width, 4)
     }
 
     func testLanczosTapsAreReusedPerSidePair() {
