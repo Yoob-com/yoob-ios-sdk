@@ -24,10 +24,13 @@ public struct YoobAvatarView: View {
 
     public var body: some View {
         let moving = motion && !reduceMotion && avatar.manifest?.engine == .realistic
-        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !moving)) { timeline in
+        // While a lip frame fades in, every display refresh draws the fade's next step (120 Hz on ProMotion iPhones whose
+        // app allows it); otherwise the speaking motion's 30 Hz is enough.
+        let fading = avatar.fadingFrom != nil
+        TimelineView(.animation(minimumInterval: fading ? nil : 1.0 / 30, paused: !(moving || fading))) { timeline in
             let pose = moving ? motionState.update(level: avatar.voiceLevel, speaking: avatar.isShowingSpeech,
                                                    at: timeline.date.timeIntervalSinceReferenceDate) : .zero
-            layers
+            layers(at: timeline.date)
                 .scaleEffect(1 + pose.scale, anchor: UnitPoint(x: 0.5, y: 0.45))
                 .rotationEffect(.degrees(pose.degrees), anchor: UnitPoint(x: 0.5, y: 0.62))
                 .offset(x: pose.dx, y: pose.dy)
@@ -46,15 +49,21 @@ public struct YoobAvatarView: View {
         }
     }
 
-    private var layers: some View {
+    private func layers(at date: Date) -> some View {
         ZStack {
             IdleLayer(avatar: avatar, contentMode: contentMode)
                 .compositingGroup()
                 .opacity(avatar.isShowingSpeech ? 0 : 1)
             if let frame = avatar.speechFrame {
-                picture(frame)
-                    .compositingGroup()
-                    .opacity(avatar.isShowingSpeech ? 1 : 0)
+                // The lip cadence's fade: the new frame drawn at its weight over the one before (both opaque, so the result
+                // is their mix).
+                let weight = avatar.lipBlendWeight(at: date)
+                ZStack {
+                    if weight < 1, let from = avatar.fadingFrom { picture(from) }
+                    picture(frame).opacity(weight)
+                }
+                .compositingGroup()
+                .opacity(avatar.isShowingSpeech ? 1 : 0)
             }
         }
         .animation(.easeInOut(duration: fade), value: avatar.isShowingSpeech)

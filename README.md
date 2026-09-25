@@ -11,7 +11,7 @@ own LLM and voice.
 - **Private by design.** Faces render on the device. The SDK sends Yoob only what is listed under [Network](#network):
   conversation audio goes through Yoob only when you use Yoob voice.
 
-Requires iOS 17 or later and Xcode 16 or later. The current preview release is 0.5.0; see [Changes in 0.5.0](#changes-in-050), [0.4.1](#changes-in-041) and [0.4.0](#changes-in-040) if you are upgrading.
+Requires iOS 17 or later and Xcode 16 or later. The current preview release is 0.6.0; see [Changes in 0.6.0](#changes-in-060), [0.5.0](#changes-in-050), [0.4.1](#changes-in-041) and [0.4.0](#changes-in-040) if you are upgrading.
 
 ## Install
 
@@ -88,6 +88,14 @@ let heard = avatar.interrupt()
 The avatar holds the voice back for the first frame (up to `maxSyncDelay`, 1.8 s by default), so lips and voice
 start together. Audio always plays, even if the character failed to load.
 
+Speech that arrives in real time (a WebRTC or LiveKit agent) can use low-latency lips instead: each frame is drawn as
+soon as a little of the audio after it is in (120 ms for the realistic Luna), and the voice plays a fixed short delay
+after it arrives (127 ms) instead of waiting for the first frame:
+
+```swift
+avatar.lipSync = .instant          // .automatic (default): .standard for speak, .instant for appendAudio
+```
+
 ### Your app already plays the audio?
 
 Render without playing, and report how much has been heard:
@@ -97,6 +105,9 @@ try avatar.appendAudio(pcm: chunk, sampleRate: 24_000)
 avatar.audioPlayed(samples: samplesHeardSoFar)   // call often, e.g. from your audio tap
 avatar.endSpeech()
 ```
+
+Here the lips are drawn the low-latency way by default (`lipSync` `.automatic`), since your player does not wait for
+them. If you can delay your playback a little, about 130 ms keeps the realistic Luna's lips exactly on the voice.
 
 ## Talk with it: Yoob voice
 
@@ -342,7 +353,10 @@ the CDN, but the session is opened and metered like a cloud one.
 ## Performance
 
 - **Rendering:** the realistic renderer uses the GPU and falls back to the CPU if a GPU returns empty frames (the iOS
-  Simulator does).
+  Simulator does). Frames are composed on the GPU when a self-check against the CPU path passes.
+- **120 Hz lips:** with `lipCadence` `.blend` (the default) the mouth moves at every display refresh. Add
+  `CADisableMinimumFrameDurationOnPhone` (Boolean, YES) to your app's Info.plist so ProMotion iPhones can refresh at
+  120 Hz; without it the blend runs at 60 Hz.
 - **Test hardware:** the engines are the ones the Luna app runs on iPhone Air (A19 Pro). On a Mac with Apple silicon they render at 45–80 fps.
 - **Older iPhones:** test on your oldest supported device before shipping.
 - **Simulator:** it works but renders slowly. Build Release to judge motion there.
@@ -410,6 +424,47 @@ If it says you are not a member, make your organization membership public or ask
   4. Always set the voice and instructions for voice sessions on the server.
   5. Build the request body yourself. Don't pass fields from the app through to Yoob.
   6. Keep the key in the server's environment, and return Yoob's response without logging tokens.
+
+## Changes in 0.6.0
+
+The realistic engine is brought up to date with the Luna app's avatar runtime (September 24-25). Measurements are the
+Luna app's, on the same renderer and model files, on an iPhone Air and on a Mac.
+
+- **Lips on the voice.** Each character's lip model moves the mouth ahead of its audio (it learned the timing of its
+  training footage: 83 ms for the realistic Luna, measured with SyncNet), so frames are now shown that much later, and
+  the silence seal is judged on the audio heard when the frame shows. Frames also wait for the audio output's own
+  latency (large over Bluetooth). The classic anime character is shown 30 ms later.
+- **Smoother mouth motion (`lipCadence`, default `.blend`).** Each new lip frame fades in over the one before across one
+  frame's time, centred on the moment its audio is heard, and the view refreshes at the display rate while it fades.
+  At 120 Hz the change per refresh is far steadier (coefficient of variation 0.47 against 2.21 for whole frames shown
+  at 60 Hz) with the same timing. `.steps` shows whole frames as before.
+- **Sharper lips (realistic Luna).** The model's mouth picture is sharpened on the GPU and only her mouth, jaw and
+  chin are taken from it; the rest of the face square is the host video's own full-resolution pixels. Mouth detail
+  matches her real footage (high-frequency energy 1.93 against 1.37 before; footage 1.93) and the face square no longer
+  shimmers against the host (0.33 grey levels a frame, from 2.5). Measured cost on a Mac: 0.06 ms a frame.
+- **Fuller articulation (realistic Luna).** The lip model's audio window is pushed 1.2 times further from the
+  closed-mouth window (a sealed frame stays exactly closed). Against her real footage: aperture correlation .701 to
+  .708 and SyncNet confidence 5.21 to 5.36, drawn with 240 ms of audio ahead as the SDK now draws.
+- **Faster start.** Frames are drawn once 240 ms of the audio after them is in (instead of 525 ms), three at a time,
+  the rest of the window as silence, so the voice starts about 285 ms sooner. A frame differs from the full-window one
+  by 1.7 grey levels on average.
+- **Low-latency lips (`lipSync`, `instantVoiceDelay`).** `.instant` draws each frame on its own once the face's lead plus
+  one frame of audio is in (120 ms for the realistic Luna, the rest mirrored), and with `speak` the voice plays 127 ms
+  after it arrives and never waits for a frame. Against her footage the lips score like the full window (aperture
+  correlation .691 against .699). `.automatic` (default) uses it for `appendAudio`, where your player never waits.
+- **Calmer phrase ends.** The silence seal closes over four frames even when little audio is known ahead, and a lip
+  frame across a jump in the head's footage fades over 120 ms.
+- **Runtime fixes:** each Core ML prediction runs in its own autorelease pool (a long run of predictions otherwise kept
+  every output buffer); the host video keeps its decoded group of pictures, so walking backwards stays at frame rate;
+  the lip pipeline encodes the next audio while it renders the frame before.
+- **Newer lip models.** Realistic-engine characters can use a 288 px lip model, a per-host paste matte with a steady
+  paste in time, crops derived on the device from the host video (cached under Caches/Yoob/Crops), and a head path read
+  from the pack (`CharacterManifest.calmWindow`). A character manifest may set `lipLeadMilliseconds` and
+  `articulationGain`; older SDKs ignore these fields.
+
+New API (all additive): `YoobAvatar.lipSync` (`LipSync`: `.automatic`, `.standard`, `.instant`),
+`YoobAvatar.instantVoiceDelay`, `YoobAvatar.lipCadence` (`LipCadence`: `.steps`, `.blend`),
+`CharacterManifest.calmWindow`, `.lipLeadMilliseconds`, `.articulationGain`.
 
 ## Changes in 0.5.0
 

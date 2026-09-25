@@ -25,6 +25,8 @@ targets:
       properties:
         CFBundleDisplayName: Yoob
         UILaunchScreen: {}
+        # Lets the lip cadence's blend run at 120 Hz on ProMotion iPhones.
+        CADisableMinimumFrameDurationOnPhone: true
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         # Your backend's endpoint that returns a Yoob session (see Examples/token-server).
         YoobTokenURL: http://localhost:3100/yoob-session

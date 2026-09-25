@@ -7,6 +7,12 @@ import XCTest
 final class AvatarEndToEndTests: XCTestCase {
     func testRealisticSpeaksWithExternalClock() async throws { try await speak("luna-realistic") }
     func testAnimeSpeaksWithExternalClock() async throws { try await speak("luna-anime") }
+    /// The anime model on the realistic runtime (`luna-anime-v2`), when the local packs include it.
+    func testAnimeOnTheRealisticRuntimeSpeaksWithExternalClock() async throws {
+        guard let packs = ProcessInfo.processInfo.environment["YOOB_LOCAL_PACKS"],
+              FileManager.default.fileExists(atPath: packs + "/luna-anime-v2") else { throw XCTSkip("no luna-anime-v2 pack") }
+        try await speak("luna-anime-v2")
+    }
 
     private func speak(_ character: String) async throws {
         let env = ProcessInfo.processInfo.environment

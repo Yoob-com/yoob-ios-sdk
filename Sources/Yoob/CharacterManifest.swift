@@ -38,6 +38,15 @@ public struct CharacterManifest: Codable, Sendable, Equatable {
     public let poster: String
     public let idle: Idle
     public let calmHosts: CalmHosts?
+    /// Realistic engine: a pack file describing the head path's lanes (`calm-window.json`), for characters whose host clip
+    /// is walked lane by lane rather than through `calmHosts`. Added in 0.6.0; older SDKs ignore it.
+    public let calmWindow: String?
+    /// How far this character's lip model moves the mouth ahead of the audio it was given, in milliseconds: the face shows
+    /// each frame this much later. Nil: the SDK's measured value for the character's model. Added in 0.6.0.
+    public let lipLeadMilliseconds: Int?
+    /// Realistic engine: the lip model's articulation gain (1 draws the model's own mouth). Nil: the SDK's measured value
+    /// for the character's model. Added in 0.6.0.
+    public let articulationGain: Double?
     public let minSDK: String
     public let files: [File]
 
@@ -61,6 +70,14 @@ public struct CharacterManifest: Codable, Sendable, Equatable {
             }
         }
         for path in [poster] + idle.frames where !seen.contains(path) { throw YoobError.invalidAssets("missing \(path)") }
+        if let calmWindow {
+            try PackPath.check(calmWindow)
+            guard engine == .realistic, seen.contains(calmWindow) else { throw YoobError.invalidAssets("missing \(calmWindow)") }
+        }
+        guard lipLeadMilliseconds.map({ (0...500).contains($0) }) ?? true,
+              articulationGain.map({ $0.isFinite && (0.5...2).contains($0) }) ?? true else {
+            throw YoobError.invalidAssets("manifest lip timing")
+        }
     }
 }
 

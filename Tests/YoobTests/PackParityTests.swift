@@ -39,7 +39,7 @@ final class PackParityTests: XCTestCase {
                 tail = true; samples = [Float](repeating: 0, count: 16 * 640)
             } else { break }
             _ = try await avatar.append(samples: samples)
-            while let image = try await avatar.image(for: frames.count) { frames.append(image.rgba) }
+            while let image = try await avatar.image(for: frames.count) { frames.append(image.pixels) }
         }
         return frames
     }

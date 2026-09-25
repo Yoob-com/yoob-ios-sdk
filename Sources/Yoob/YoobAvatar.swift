@@ -79,6 +79,38 @@ public final class YoobAvatar {
     /// Longest the voice is held back at the start of an utterance while the first frame renders.
     public var maxSyncDelay: Duration = .milliseconds(1800)
 
+    /// How the lips are drawn against the voice.
+    public enum LipSync: Sendable, Equatable {
+        /// `standard` for `speak(pcm:sampleRate:)`, `instant` for `appendAudio(pcm:sampleRate:)`, where your player starts
+        /// the voice as soon as it arrives.
+        case automatic
+        /// Each frame is drawn with 240 ms of the audio after it, and the voice waits for the first frame (up to
+        /// `maxSyncDelay`). The best lips for speech that arrives in bursts faster than real time.
+        case standard
+        /// Low latency, for speech that arrives in real time (WebRTC, LiveKit). Each frame is drawn on its own as soon as a
+        /// little of the audio after it has arrived (120 ms for the realistic Luna). With `speak(pcm:sampleRate:)` the
+        /// voice plays a fixed short delay after it arrives (`instantVoiceDelay`) and never waits for a frame.
+        /// Realistic characters only; the classic anime character draws as `standard`.
+        case instant
+    }
+    /// Applies from the next utterance.
+    public var lipSync: LipSync = .automatic
+    /// With `LipSync.instant` and `speak(pcm:sampleRate:)`: how long the voice waits after it arrives. Nil: the character's
+    /// own delay (127 ms for the realistic Luna). Applies from the next utterance.
+    public var instantVoiceDelay: Duration?
+
+    /// How the 25 lip frames a second are presented on the display.
+    public enum LipCadence: Sendable, Equatable {
+        /// Each frame is shown whole when its audio is heard.
+        case steps
+        /// Each new frame fades in over the one before across one frame's time (40 ms), centred on the moment its audio is
+        /// heard, so the mouth moves at every display refresh and meets the voice exactly as the steps do. A jump in the
+        /// head's footage fades over 120 ms. Needs `CADisableMinimumFrameDurationOnPhone` in your Info.plist for 120 Hz
+        /// on ProMotion iPhones (60 Hz otherwise).
+        case blend
+    }
+    public var lipCadence: LipCadence = .blend
+
     private let source: YoobSource
     private let version: String?
     private var credentials: YoobCredentials?
@@ -111,10 +143,16 @@ public final class YoobAvatar {
         var levels: [Float] = []
         var levelPeak: Float = 0, levelFill = 0
         var externalPlayed: Int64 = 0
-        var prepared: [Int: CGImage] = [:]
+        var prepared: [Int: EngineFrame] = [:]
         var nextToPrepare = 0
         var preparing = false
         var shown = -1
+        var shownHost: Int?
+        /// Samples the face shows its frames later than the audio heard: the lip model's lead, plus the output path's
+        /// latency when the avatar plays the voice itself.
+        var displayDelaySamples: Int64 = 0
+        /// The voice starts this long after the first audio arrives instead of waiting for the first frame.
+        var instantDelay: Duration?
         init(id: Int, sampleRate: Double, resampler: AvatarResampler, feed: AsyncStream<[Float]>.Continuation, consumer: Task<Void, Never>) {
             self.id = id; self.sampleRate = sampleRate; self.resampler = resampler; self.feed = feed; self.consumer = consumer
         }
@@ -321,9 +359,17 @@ public final class YoobAvatar {
         let (stream, feed) = AsyncStream<[Float]>.makeStream(bufferingPolicy: .unbounded)
         let engine = engine
         let startFrame = hostFrame
+        let instant: Bool
+        switch lipSync {
+        case .automatic: instant = externalClock
+        case .standard: instant = false
+        case .instant: instant = true
+        }
+        let drawsInstantly = instant && (engine?.instantVoiceDelayMilliseconds ?? 0) > 0
         let consumer = Task.detached(priority: .userInitiated) { [weak self] in
             guard let engine else { return }
             await engine.restart(hostFrame: startFrame)
+            await engine.setDrawing(drawsInstantly ? .instant : .standard)
             do {
                 for await samples in stream {
                     try Task.checkCancellation()
@@ -336,6 +382,14 @@ public final class YoobAvatar {
             }
         }
         let utterance = Utterance(id: id, sampleRate: sampleRate, resampler: resampler, feed: feed, consumer: consumer)
+        if let engine {
+            var delay = Double(engine.lipLeadMilliseconds) / 1000
+            if !externalClock { delay += SpeechPlayer.outputLatency }
+            utterance.displayDelaySamples = Int64((delay * sampleRate).rounded())
+            if drawsInstantly, !externalClock {
+                utterance.instantDelay = instantVoiceDelay ?? .milliseconds(engine.instantVoiceDelayMilliseconds)
+            }
+        }
         self.utterance = utterance
         stats.utterances += 1
         if case .ready = phase { phase = .speaking }
@@ -347,7 +401,12 @@ public final class YoobAvatar {
     private func releaseHeldAudio(force: Bool) {
         guard let utterance, !utterance.started, !externalClock else { return }
         let waited = utterance.heldSince.map { $0.duration(to: .now) } ?? .zero
-        guard force || utterance.prepared[0] != nil || waited >= maxSyncDelay else { return }
+        if let delay = utterance.instantDelay {
+            // Instant lips: the voice never waits for a frame, only for its fixed delay.
+            guard force || waited >= delay else { return }
+        } else {
+            guard force || utterance.prepared[0] != nil || waited >= maxSyncDelay else { return }
+        }
         utterance.started = true
         for chunk in utterance.held { player.schedule(chunk) }
         utterance.held = []
@@ -373,6 +432,7 @@ public final class YoobAvatar {
         if utterance.shown >= 0 { hostFrame += utterance.shown + 1 }
         self.utterance = nil
         isShowingSpeech = false
+        endFade()
         ticker?.cancel(); ticker = nil
         if case .speaking = phase { phase = engine == nil ? .notPrepared : .ready }
         if engine != nil, case .notPrepared = phase { phase = .ready }
@@ -395,19 +455,33 @@ public final class YoobAvatar {
         if !utterance.started, !externalClock { releaseHeldAudio(force: false) }
         let played = externalClock ? utterance.externalPlayed : (utterance.started ? player.playedSamples : 0)
         let playing = externalClock ? played > 0 : utterance.started
-        // Frame n covers audio from n/25 s; show it once that audio is audible.
-        let playedFrame = playing ? Int(Double(played) * 25 / utterance.sampleRate) : -1
-        let level = playedFrame >= 0 && playedFrame < utterance.levels.count ? Double(utterance.levels[playedFrame]) : 0
+        let perFrame = utterance.sampleRate / 25
+        // Frame n covers audio from n/25 s; the level follows the voice as heard.
+        let heardFrame = playing ? Int(Double(played) / perFrame) : -1
+        let level = heardFrame >= 0 && heardFrame < utterance.levels.count ? Double(utterance.levels[heardFrame]) : 0
         if level != voiceLevel { voiceLevel = level }
 
-        if playedFrame >= 0, let frame = utterance.prepared.keys.filter({ $0 <= playedFrame && $0 > utterance.shown }).max(),
-           let image = utterance.prepared[frame] {
-            stats.framesSkipped += max(0, frame - utterance.shown - 1)
-            stats.framesShown += 1
-            speechFrame = image
-            utterance.shown = frame
-            isShowingSpeech = true
-            utterance.prepared = utterance.prepared.filter { $0.key > frame }
+        // The face's clock, in frames: what is heard, less the lip model's lead (and the output path's latency).
+        let position = playing ? Double(played - utterance.displayDelaySamples) / perFrame : -1
+        let playedFrame = position >= 0 ? Int(position) : -1
+        let blending = lipCadence == .blend
+        // With the blend a frame starts to fade in half a frame before it is due.
+        let newest = position >= 0 ? Int((position + (blending ? 0.5 : 0)).rounded(.down)) : -1
+        if newest >= 0, let frame = utterance.prepared.keys.filter({ $0 <= newest && $0 > utterance.shown }).max(),
+           let picture = utterance.prepared[frame] {
+            let jump = !Self.neighbourHosts(utterance.shownHost, picture.host)
+            // A frame across a jump in the head's footage is never shown before it is due.
+            if !(blending && jump && frame > playedFrame) {
+                stats.framesSkipped += max(0, frame - utterance.shown - 1)
+                stats.framesShown += 1
+                if blending { startFade(to: picture, frame: frame, previous: utterance.shown, jump: jump, position: position) }
+                else { endFade() }
+                speechFrame = picture.image
+                utterance.shown = frame
+                utterance.shownHost = picture.host
+                isShowingSpeech = true
+                utterance.prepared = utterance.prepared.filter { $0.key > frame }
+            }
         }
         // Frames the audio has already passed are not worth rendering.
         if utterance.nextToPrepare < playedFrame - 1 { utterance.nextToPrepare = playedFrame - 1 }
@@ -415,16 +489,57 @@ public final class YoobAvatar {
         utterance.preparing = true
         let wanted = utterance.nextToPrepare, id = utterance.id
         Task { [weak self] in
-            let image: CGImage?
-            do { image = try await engine.frame(wanted) } catch { self?.engineFailed(id: id, error); return }
+            let picture: EngineFrame?
+            do { picture = try await engine.frame(wanted) } catch { self?.engineFailed(id: id, error); return }
             guard let self, let current = self.utterance, current.id == id else { return }
             current.preparing = false
-            if let image {
-                current.prepared[wanted] = image
+            if let picture {
+                current.prepared[wanted] = picture
                 current.nextToPrepare = wanted + 1
                 self.tick()
             }
         }
+    }
+
+    // MARK: - Lip cadence
+
+    /// The picture a fading frame fades in over, and the fade's progress (`lipBlendWeight(at:)`). Nil: no fade runs.
+    private(set) var fadingFrom: CGImage?
+    @ObservationIgnored private var fadeStart = Date.distantPast
+    @ObservationIgnored private var fadeInitialWeight = 1.0
+    @ObservationIgnored private var fadeSeconds = 0.04
+
+    /// The weight of `speechFrame` over `fadingFrom` at `date` (1 when no fade runs). The view reads it at every refresh.
+    func lipBlendWeight(at date: Date) -> Double {
+        guard fadingFrom != nil else { return 1 }
+        return min(1, max(fadeInitialWeight, fadeInitialWeight + date.timeIntervalSince(fadeStart) / fadeSeconds))
+    }
+
+    /// Hosts one or two apart in the footage (or no host at all on either side) show one head; anything else is a jump.
+    private static func neighbourHosts(_ a: Int?, _ b: Int?) -> Bool {
+        guard let a, let b else { return a == nil && b == nil }
+        return abs(a - b) <= 2
+    }
+
+    /// Frame `frame` replaces frame `previous` on screen at face clock `position` (frames). A neighbour fades in over one
+    /// frame's time centred on its due time (half weight when due); a jump in the footage over three frames, from its due
+    /// time. The first frame of an utterance, a frame after more than one skipped, or one ready after its fade would have
+    /// ended, steps in whole. Without a host (the classic anime) frames step, as in the Luna app.
+    private func startFade(to picture: EngineFrame, frame: Int, previous: Int, jump: Bool, position: Double) {
+        guard previous >= 0, frame - previous <= 2, picture.host != nil, let from = speechFrame else { return endFade() }
+        let window = jump ? 3.0 : 1.0
+        let weight = min(1, max(0, (position - Double(frame)) / window + 0.5))
+        guard weight < 1 else { return endFade() }
+        // A fade across a jump still running keeps the picture from before the jump under the new frame: fading from the
+        // half-faded picture would show the jump again.
+        if fadingFrom != nil, fadeSeconds > 0.05, lipBlendWeight(at: Date()) < 1 { return }
+        fadingFrom = from
+        fadeStart = Date(); fadeInitialWeight = weight; fadeSeconds = 0.04 * window
+    }
+
+    private func endFade() {
+        if fadingFrom != nil { fadingFrom = nil }
+        fadeInitialWeight = 1
     }
 
     // MARK: - Session
@@ -508,6 +623,7 @@ public final class YoobAvatar {
         engine = nil
         isShowingSpeech = false
         speechFrame = nil
+        endFade()
         voiceLevel = 0
         if let credentials {
             self.credentials = nil
