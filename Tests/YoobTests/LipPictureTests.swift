@@ -11,6 +11,7 @@ final class LipPictureTests: XCTestCase {
 
     func testEachFaceGetsItsOwnLipPicture() {
         XCTAssertEqual(LipPicture.face(identity: "h08-development"), .luna)
+        XCTAssertEqual(LipPicture.face(identity: "c-198d5a14"), .luna, "her pack on the CDN since 2026-10-15 carries an opaque identity")
         XCTAssertEqual(LipPicture.face(identity: "cartoon-pup-a144-leadfree"), .dog)
         XCTAssertNil(LipPicture.face(identity: "anime-f4-e124-test"), "the anime pack's own matte already does it")
         XCTAssertEqual(LipPicture.dog.sharpen, 0)

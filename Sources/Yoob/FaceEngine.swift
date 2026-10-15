@@ -59,12 +59,12 @@ enum FaceTuning {
 
     static func leadMilliseconds(identity: String) -> Int {
         switch identity {
-        case lunaIdentity: 83
+        case lunaIdentity, LipPicture.lunaOpaqueIdentity: 83
         case animeIdentity: 46
         default: 0
         }
     }
-    static func articulationGain(identity: String) -> Double { identity == lunaIdentity ? 1.2 : 1 }
+    static func articulationGain(identity: String) -> Double { [lunaIdentity, LipPicture.lunaOpaqueIdentity].contains(identity) ? 1.2 : 1 }
 
     /// Frames of audio past a frame that `LipDrawing.instant` draws it with: the lead rounded to frames, plus one (Luna 3,
     /// the anime 2, a lead-free face 1).
