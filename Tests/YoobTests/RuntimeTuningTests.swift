@@ -9,6 +9,8 @@ final class RuntimeTuningTests: XCTestCase {
         XCTAssertEqual(FaceTuning.leadMilliseconds(identity: FaceTuning.animeIdentity), 46)
         XCTAssertEqual(FaceTuning.leadMilliseconds(identity: "another-model"), 0)
         XCTAssertEqual(FaceTuning.articulationGain(identity: FaceTuning.lunaIdentity), 1.2)
+        XCTAssertEqual(FaceTuning.leadMilliseconds(identity: LipPicture.lunaOpaqueIdentity), 83, "her opaque CDN identity")
+        XCTAssertEqual(FaceTuning.articulationGain(identity: LipPicture.lunaOpaqueIdentity), 1.2)
         XCTAssertEqual(FaceTuning.articulationGain(identity: FaceTuning.animeIdentity), 1)
         // Frames of future audio: the lead rounded to frames, plus one.
         XCTAssertEqual(FaceTuning.instantLookahead(lead: 83), 3)

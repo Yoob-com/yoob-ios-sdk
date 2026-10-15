@@ -11,7 +11,7 @@ own LLM and voice.
 - **Private by design.** Faces render on the device. The SDK sends Yoob only what is listed under [Network](#network):
   conversation audio goes through Yoob only when you use Yoob voice.
 
-Requires iOS 17 or later and Xcode 16 or later. The current preview release is 0.6.0; see [Changes in 0.6.0](#changes-in-060), [0.5.0](#changes-in-050), [0.4.1](#changes-in-041) and [0.4.0](#changes-in-040) if you are upgrading.
+Requires iOS 17 or later and Xcode 16 or later. The current preview release is 0.6.1; see [Changes in 0.6.1](#changes-in-061), [0.6.0](#changes-in-060), [0.5.0](#changes-in-050), [0.4.1](#changes-in-041) and [0.4.0](#changes-in-040) if you are upgrading.
 
 ## Install
 
@@ -424,6 +424,12 @@ If it says you are not a member, make your organization membership public or ask
   4. Always set the voice and instructions for voice sessions on the server.
   5. Build the request body yourself. Don't pass fields from the app through to Yoob.
   6. Keep the key in the server's environment, and return Yoob's response without logging tokens.
+
+## Changes in 0.6.1
+
+- Luna keeps her sharpened lips (and her measured lip lead and articulation) with the pack the CDN serves since
+  2026-10-15, whose identity is opaque (`c-198d5a14`) rather than her training name. 0.6.0 matched only the old name, so
+  her lips were drawn unsharpened and pasted over the whole square. Nothing else changes.
 
 ## Changes in 0.6.0
 

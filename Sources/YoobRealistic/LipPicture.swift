@@ -63,9 +63,13 @@ public struct LipPicture: Sendable, Equatable {
     /// The new anime face on the realistic runtime (F4 e124, "anime-f4-e124-test") has none: its pack's own paste matte
     /// already keeps the square at its host's detail (0.99) with 0.43 levels of shimmer, and its mouth has 1.21 of its
     /// footage's detail; sharpening only added contrast to the line art (1.28).
+    /// Since 2026-10-15 the CDN's packs carry an opaque identity (`c-` and 8 hex digits) instead of the training name; Luna's
+    /// is matched under both, so a pack fetched before or after the change keeps her lip picture.
+    /// Luna's pack identity on the CDN since 2026-10-15 (the Luna app's `LipPicture.face` uses the same).
+    public static let lunaOpaqueIdentity = "c-198d5a14"
     public static func face(identity: String) -> LipPicture? {
         switch identity {
-        case "h08-development": luna
+        case lunaOpaqueIdentity, "h08-development": luna
         case "cartoon-pup-a144-leadfree": dog
         default: nil
         }
